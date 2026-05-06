@@ -86,10 +86,10 @@ function calcYears(t, profile, waitYearsActual) {
   return { entryYear, exitYear };
 }
 
-const BG = [250, 248, 244];
+const BG = [251, 247, 236];
 
 const CONFIG = {
-  dotCount:        90,
+  dotCount:        106,
   minRadius:       6,
   maxRadius:       13,
   riseSpeed:       0.9,
@@ -110,27 +110,31 @@ function cr(p0,p1,p2,p3,t){
 
 function buildPath(W,H){
   const A=[
-    {x:0.82,y:0.14},
-    {x:0.70,y:0.12},
-    {x:0.54,y:0.13},
-    {x:0.36,y:0.18},
-    {x:0.20,y:0.26},
-    {x:0.12,y:0.36},
-    {x:0.16,y:0.46},
-    {x:0.30,y:0.52},
-    {x:0.50,y:0.55},
-    {x:0.68,y:0.54},
-    {x:0.80,y:0.60},
-    {x:0.84,y:0.68},
-    {x:0.74,y:0.76},
-    {x:0.56,y:0.80},
-    {x:0.36,y:0.82},
-    {x:0.18,y:0.84},
-    {x:0.10,y:0.90},
-    {x:0.14,y:0.96},
-    {x:0.32,y:0.98},
-    {x:0.52,y:0.97},
-    {x:0.68,y:0.95},
+    {x:0.86,y:0.22},  // gate — shifted right + down
+    {x:0.72,y:0.19},
+    {x:0.55,y:0.20},
+    {x:0.37,y:0.25},
+    {x:0.19,y:0.33},  // upper-left
+    {x:0.12,y:0.42},  // twist 1
+    {x:0.19,y:0.51},
+    {x:0.34,y:0.55},
+    {x:0.52,y:0.56},
+    {x:0.68,y:0.55},
+    {x:0.80,y:0.59},  // center-right
+    {x:0.84,y:0.66},  // twist 2
+    {x:0.72,y:0.72},
+    {x:0.54,y:0.73},
+    {x:0.36,y:0.73},
+    {x:0.18,y:0.75},  // center-left
+    {x:0.12,y:0.82},  // twist 3
+    {x:0.21,y:0.88},
+    {x:0.37,y:0.91},
+    {x:0.54,y:0.92},
+    {x:0.67,y:0.90},  // lower-right
+    {x:0.71,y:0.84},  // twist 4 — brief right peak   
+    {x:0.56,y:0.91},
+    {x:0.38,y:0.95},
+    {x:0.20,y:0.97},  // tail — lower-left
   ].map(a=>({x:a.x*W,y:a.y*H}));
 
   const pts=[];
@@ -163,13 +167,33 @@ const FIDGETS=['pace','spin','bounce'];
 const HOVER_FX=['year','glow','breath','lunge','shake'];
 
 new p5(function(p){
-  let pathPts=[],dots=[],gatePt={x:0,y:0};
+  let pathPts=[],dots=[],gatePt={x:0,y:0},gateTimer=0;
   let doorOpen=0,doorState='closed',doorTimer=0;
+  const GRAIN_FRAMES=8;
+  let grainFrames=[],grainIdx=0,grainTick=0,_distPts=[];
+
+  function makeGrain(){
+    const g=p.createGraphics(p.width,p.height);
+    g.pixelDensity(1);
+    g.loadPixels();
+    const W=g.width,H=g.height,px=g.pixels;
+    const n=Math.floor(W*H*0.05);
+    for(let i=0;i<n;i++){
+      const idx=4*(Math.floor(Math.random()*H)*W+Math.floor(Math.random()*W));
+      const dark=Math.random()<0.05;
+      const v=dark?Math.random()*40+30|0:Math.random()*80+80|0;
+      px[idx]=v; px[idx+1]=v*0.88|0; px[idx+2]=v*0.74|0;
+      px[idx+3]=dark?Math.random()*40+55|0:Math.random()*35+22|0;
+    }
+    g.updatePixels();
+    return g;
+  }
 
   p.setup=function(){
     p.createCanvas(p.windowWidth,p.windowHeight).parent('app');
     p.pixelDensity(window.devicePixelRatio||1);
     init();
+    for(let i=0;i<GRAIN_FRAMES;i++) grainFrames.push(makeGrain());
   };
 
   function init(){
@@ -186,6 +210,7 @@ new p5(function(p){
       dots.push(nd);
     }
     assignFidgets();
+    gateTimer = Math.floor(p.random(20*60, 30*60));
   }
 
   function makeDot(x,y,t){
@@ -205,6 +230,7 @@ new p5(function(p){
       targetT:t,moveDelay:0,moving:false,
       condemned:false,
       canDie: Math.random()<0.15,
+      isDragged:false,returning:false,dragVX:0,dragVY:0,
       enterGate:false,enterProgress:0,_enterScale:1,
       enterColor:[60,180,90],
     };
@@ -219,24 +245,12 @@ new p5(function(p){
     }
   }
 
-  // Autonomous drift: queue inches forward continuously, independent of deaths
-  // ~1 full slot per 90s at 60fps
-  const DRIFT_RATE = 0.01124 / (30 * 60);  // ~1 exit per 30s
-
-  function driftQueue(){
-    for(const d of dots){
-      if(d.state==='waiting'){
-        // Update targetT so spring movement and drift don't fight
-        d.targetT = Math.max(0, d.targetT - DRIFT_RATE);
-        // If not currently spring-moving, apply drift directly too
-        if(!d.moving){
-          d.t = d.targetT;
-          const pos = getPos(pathPts, d.t);
-          d.x = pos.x; d.y = pos.y;
-          d.originX = pos.x; d.originY = pos.y;
-        }
-        if(d.t < 0.008 && !d.enterGate){ d.enterGate=true; d.state='entering'; }
-      }
+  function tickGate(){
+    if(dots.some(d=>d.state==='entering')||doorState!=='closed') return;
+    if(--gateTimer<=0){
+      const front=dots.filter(d=>d.state==='waiting').sort((a,b)=>a.t-b.t)[0];
+      if(front){front.enterGate=true;front.state='entering';}
+      gateTimer=Math.floor(p.random(20*60,30*60));
     }
   }
 
@@ -246,8 +260,8 @@ new p5(function(p){
       .filter(d=>d.state==='waiting'&&d.t>=fromT-0.005)
       .sort((a,b)=>a.t-b.t)
       .forEach((d,i)=>{
-        d.targetT=Math.max(0,d.t-slot);
-        d.moveDelay=i*p.random(0,3);  // tiny stagger, no big lag
+        d.targetT=Math.max(0,d.targetT-slot);
+        d.moveDelay=i*Math.floor(p.random(0,2));
         d.moving=true;
       });
   }
@@ -263,7 +277,23 @@ new p5(function(p){
   }
 
   function update(d){
-    if(d.moving&&d.state==='waiting'){
+    if(d.isDragged&&d.state==='waiting'){
+      // Keep queue position current so return target is always correct
+      d.t=d.targetT;d.moving=false;
+      const qpos=getPos(pathPts,d.t);
+      d.originX=qpos.x;d.originY=qpos.y;
+      // Lag toward mouse — feels like picking up a small weight
+      d.x=p.lerp(d.x,p.mouseX,0.25);
+      d.y=p.lerp(d.y,p.mouseY,0.25);
+    }else if(d.returning&&d.state==='waiting'){
+      // Spring back to queue position
+      d.dragVX=(d.dragVX+0.10*(d.originX-d.x))*0.80;
+      d.dragVY=(d.dragVY+0.10*(d.originY-d.y))*0.80;
+      d.x+=d.dragVX;d.y+=d.dragVY;
+      if(p.dist(d.x,d.y,d.originX,d.originY)<0.8&&Math.abs(d.dragVX)<0.08){
+        d.x=d.originX;d.y=d.originY;d.t=d.targetT;d.returning=false;
+      }
+    }else if(d.moving&&d.state==='waiting'){
       if(d.moveDelay>0){d.moveDelay--;}
       else{
         const diff=d.targetT-d.t;
@@ -271,7 +301,6 @@ new p5(function(p){
         else{d.t=d.targetT;d.moving=false;}
         const pos=getPos(pathPts,d.t);
         d.x=pos.x;d.y=pos.y;d.originX=pos.x;d.originY=pos.y;
-        if(d.t<0.008&&!d.enterGate){d.enterGate=true;d.state='entering';}
       }
     }
 
@@ -304,8 +333,8 @@ new p5(function(p){
         if(d.waitYears/d.waitMax>=CONFIG.yellowThreshold)
           d.waitYears=d.waitMax*(CONFIG.yellowThreshold-0.005);
       }
-      if(d.fidget){if(d.fidgetDelay>0)d.fidgetDelay--;else d.fidgetPhase+=0.068;}
-      if(!d.hovered&&p.dist(p.mouseX,p.mouseY,d.x,d.y)<d.r+10){
+      if(d.fidget&&!d.isDragged){if(d.fidgetDelay>0)d.fidgetDelay--;else d.fidgetPhase+=0.068;}
+      if(!d.isDragged&&!d.hovered&&p.dist(p.mouseX,p.mouseY,d.x,d.y)<d.r+10){
         d.hovered=true;
         d.hoverEffect=HOVER_FX[Math.floor(p.random(HOVER_FX.length))];
         d.hoverTimer=110;d.hoverVal=0;
@@ -313,7 +342,7 @@ new p5(function(p){
       if(d.hovered){d.hoverVal++;d.hoverTimer--;if(d.hoverTimer<=0){d.hovered=false;d.hoverEffect=null;}}
       // Only die once deep yellow (waitFrac >= 0.93), so gradient is visible first
       const waitFracNow=d.waitYears/d.waitMax;
-      if(d.condemned&&waitFracNow>=0.97&&p.random()<CONFIG.deathChance*d.profile.deathW){
+      if(d.condemned&&waitFracNow>=0.97&&!d.isDragged&&p.random()<CONFIG.deathChance*d.profile.deathW){
         d.state='rising';d.riseY=0;d.riseProgress=0;d.riseLen=p.random(80,200);
       }
     }else if(d.state==='rising'){
@@ -386,6 +415,22 @@ new p5(function(p){
       }
       else if(d.hoverEffect==='shake') ox+=p.random(-3,3);
     }
+    // Drag: ghost at queue position + elastic tether + lift glow
+    if(d.isDragged||d.returning){
+      const dist=p.dist(d.x,d.y,d.originX,d.originY);
+      if(dist>2){
+        p.noStroke();p.fill(r,g,b,24);
+        p.ellipse(d.originX,d.originY,d.r*2,d.r*2);
+        const ta=p.map(dist,0,220,0,68,true);
+        p.stroke(r,g,b,ta);p.strokeWeight(0.8);
+        p.line(d.originX,d.originY,d.x+ox,d.y+oy);
+      }
+    }
+    if(d.isDragged){
+      p.noStroke();p.fill(r,g,b,16);
+      p.ellipse(d.x+ox,d.y+oy,(drawR+18)*2,(drawR+18)*2);
+      drawR*=1.14;
+    }
     p.noStroke();p.fill(r,g,b);
     p.ellipse(d.x+ox,d.y+oy,drawR*2,drawR*2);
 
@@ -433,6 +478,51 @@ new p5(function(p){
     p.noStroke();p.fill(38,158,78,175);p.ellipse(gx+3,gy,6,6);
   }
 
+  function drawDisturbance(){
+    const vx=p.mouseX-p.pmouseX,vy=p.mouseY-p.pmouseY;
+    const speed=Math.hypot(vx,vy);
+    const R=54,cx=p.mouseX,cy=p.mouseY;
+
+    // Spawn grain particles when mouse moves
+    if(speed>0.5){
+      const n=Math.min(Math.ceil(speed*2.8),20);
+      for(let i=0;i<n;i++){
+        const a=Math.random()*Math.PI*2;
+        const s=Math.random()*speed*0.6+0.6;
+        _distPts.push({
+          x:cx+(Math.random()-0.5)*R*0.8,
+          y:cy+(Math.random()-0.5)*R*0.8,
+          vx:Math.cos(a)*s,vy:Math.sin(a)*s,
+          life:1.0,sz:Math.random()*1.8+0.4,
+          v:(105+Math.random()*78)|0,
+        });
+      }
+      if(_distPts.length>600) _distPts.splice(0,_distPts.length-600);
+    }
+
+    // Erase grain — soft circular clearing, genuinely removes texture
+    p.erase();
+    p.noStroke();
+    for(let i=0;i<=12;i++){
+      const t=i/12;
+      p.fill(255,t*t*255);
+      p.ellipse(cx,cy,R*2*(1-t*0.78),R*2*(1-t*0.78));
+    }
+    p.noErase();
+
+    // Update and draw scattered grain particles
+    p.noStroke();
+    for(let i=_distPts.length-1;i>=0;i--){
+      const dp=_distPts[i];
+      dp.x+=dp.vx;dp.y+=dp.vy;
+      dp.vx*=0.89;dp.vy*=0.89;
+      dp.life-=0.016;
+      if(dp.life<=0){_distPts.splice(i,1);continue;}
+      p.fill(dp.v,dp.v*0.88|0,dp.v*0.74|0,dp.life*48);
+      p.ellipse(dp.x,dp.y,dp.sz,dp.sz);
+    }
+  }
+
   function drawPath(){
     p.noFill();p.stroke(205,193,176,50);p.strokeWeight(0.5);
     p.beginShape();
@@ -448,14 +538,48 @@ new p5(function(p){
 
   p.draw=function(){
     p.background(BG[0],BG[1],BG[2]);
-    updateDoor();driftQueue();drawPath();drawGate();
+    if(++grainTick>=5){grainTick=0;grainIdx=(grainIdx+1)%GRAIN_FRAMES;}
+    p.image(grainFrames[grainIdx],0,0);
+    drawDisturbance();
+    updateDoor();tickGate();drawPath();drawGate();
     for(const d of[...dots]) update(d);
-    for(const d of dots) drawDot(d);
+    for(const d of dots) if(!d.isDragged) drawDot(d);
+    for(const d of dots) if(d.isDragged) drawDot(d);
     drawTitle();
+  };
+
+  p.mousePressed=function(){
+    for(let i=dots.length-1;i>=0;i--){
+      const d=dots[i];
+      if(d.state!=='waiting') continue;
+      if(p.dist(p.mouseX,p.mouseY,d.x,d.y)<=d.r+8){
+        d.isDragged=true;d.returning=false;d.moving=false;
+        d.dragVX=0;d.dragVY=0;
+        d.hovered=false;d.hoverEffect=null;
+        // bring to top of draw order
+        dots.splice(i,1);dots.push(d);
+        break;
+      }
+    }
+  };
+
+  p.mouseReleased=function(){
+    for(const d of dots){
+      if(d.isDragged){
+        d.isDragged=false;
+        d.returning=true;
+        // flick velocity from last mouse movement
+        d.dragVX=(p.mouseX-p.pmouseX)*0.28;
+        d.dragVY=(p.mouseY-p.pmouseY)*0.28;
+        break;
+      }
+    }
   };
 
   p.windowResized=function(){
     p.resizeCanvas(p.windowWidth,p.windowHeight);
-    init();
+    _distPts=[];init();
+    grainFrames.forEach(g=>g.remove());grainFrames=[];
+    for(let i=0;i<GRAIN_FRAMES;i++) grainFrames.push(makeGrain());
   };
 });
